@@ -1,0 +1,966 @@
+---
+title: "Audit_Final_Exam_Presentation"
+author: Mughundhan Chandrasekar, Saai Krishnan Udayakumar, Amey Pophali, Sibi Senthur
+  Muthusamy, Sidharth Varadharajan
+date: "4/27/2017"
+output:
+  word_document: default
+  html_document: default
+---
+
+###**Creating an Environment**
+We create a suitable environment for performing the required operations on the given data-sets by loading the required libraries before-hand. The data-sets that are required are also loaded during preliminary stage.
+
+```{r warning=FALSE, message=FALSE}
+rm(list=ls())
+library(sqldf)
+library(plyr)
+library(readxl)
+library(stringr)
+library(lubridate)
+library(benford.analysis)
+library(pwr)
+library(pps)
+```
+
+
+We create few functions for enhancing re-usability and efficiency of the project.
+
+```{r warning=FALSE, message=FALSE}
+importAccounts = function() {
+  library(readxl, readr)
+  path = "/Users/Mughundhan/UIC/UIC Academics/SPRING 2017/AUDIT/Final Presentation/Dataset" ## folder for files downloaded from UIC Blackboard
+  files = c("arConfirmations.csv", "custCredit.csv", "empReimbursements.csv", "inventoryCounts.csv", "inventoryPerpetual.csv", "arCollections.csv", "purchases.csv", "sales.csv")
+  dataFrameList = list()
+  for(i in 1:length(files)){
+    dataFrameName = strsplit(files[i], ".", fixed = TRUE)[[1]][1]
+    fileType = strsplit(files[i], ".", fixed = TRUE)[[1]][2]
+    if(fileType == "xlsx") {
+      dataFrame = read_excel(paste(path, files[i], sep = "/"))
+    } else {
+      dataFrame = read.csv(paste(path, files[i], sep = "/"))
+    }
+    namedFrame = assign(dataFrameName, dataFrame)
+    dataFrameList[[dataFrameName]] = namedFrame
+  }
+  return(dataFrameList)
+}
+
+
+convertAccounts = function(accounts) {
+  library(stringr)
+  library(lubridate)
+  for(i in 1:length(accounts)) {
+    for (n in 1:length(accounts[[i]])) {
+      dataFrame = accounts[[i]]
+      if(str_detect(names(dataFrame[n]), "date") | str_detect(names(dataFrame[n]), "dateColl")){
+        if(is.factor(dataFrame[[n]])){
+          accounts[[i]][[n]] = ymd(as.character(dataFrame[[n]]))
+        }
+      }
+      else if(str_detect(names(dataFrame[n]), "sku") | str_detect(names(dataFrame[n]), "invoice")
+              | str_detect(names(dataFrame[n]), ".no") | str_detect(names(dataFrame[n]), ".No")  | str_detect(names(dataFrame[n]), "customer")){
+        accounts[[i]][[n]] = as.character(dataFrame[[n]])
+      }
+      else if (str_detect(names(dataFrame[n]), "cashtrue")) {
+        accounts[[i]][[n]] = as.logical(dataFrame[[n]])
+      }
+      else if(str_detect(names(dataFrame[n]), "Amount")){
+        accounts[[i]][[n]] = as.numeric(dataFrame[[n]])
+      }
+    }
+  }
+  return(accounts)
+}
+
+
+createCostofGoodsSold = function(accounts){
+  costOfGoodsSold = merge(accounts$sales, accounts$inventoryPerpetual, by="sku", all.x=T)
+  costOfGoodsSold$COGS = costOfGoodsSold$unitcost * costOfGoodsSold$qty
+  accounts[["costOfGoodsSold"]] = costOfGoodsSold
+  return(accounts)
+}
+
+
+createUnpaidAccountsReceivable = function(accounts) {
+  splitSalesbyTransaction = split(accounts$sales, accounts$sales$cashtrue)
+  credit = splitSalesbyTransaction[["FALSE"]]
+  allCreditAccounts = merge(credit, accounts$arCollections, by="invoice", all.x = T)
+  allCreditAccounts$notCollected = is.na(allCreditAccounts$amt.received)
+  allCreditAccountsbyCollection = split(allCreditAccounts, allCreditAccounts$notCollect)
+  unpaidAccountsReceivable = allCreditAccountsbyCollection[["TRUE"]]
+  accounts[["unpaidAccountsReceivable"]] = unpaidAccountsReceivable
+  return(accounts)
+}
+
+
+
+createAllowanceForDoubtfulAccounts = function(accounts) {
+  x = accounts$unpaidAccountsReceivable
+  endDateVector = rep(ymd("2016/12/31"), length(accounts$unpaidAccountsReceivable$invoice))
+  x$endDate = endDateVector
+  x$daysSincePurchase = x$endDate - x$date
+  x$interval = findInterval(x$daysSincePurchase, c(90, 180))
+  accounts[["doubtfulAccounts"]] = x
+  return(accounts)
+}
+
+
+
+createOutofStock = function(accounts){
+  salesBySKU = aggregate(qty~sku, accounts$sales,sum)
+  purchasesBySKU = aggregate(quantity~sku,accounts$purchases,sum)
+  purcahsesSalesBySKU = merge(salesBySKU, purchasesBySKU, by="sku")
+  purchasesSalesInventoryBySKU = merge(purcahsesSalesBySKU, accounts$inventory, by="sku")
+  purchasesSalesInventoryBySKU$turnover = (purchasesSalesInventoryBySKU$qtypurchasesSalesInventoryBySKU$quantity)/purchasesSalesInventoryBySKU$endstock
+  turnover = data.frame(purchasesSalesInventoryBySKU$sku,purchasesSalesInventoryBySKU$turnover)
+  colnames(turnover)=c("sku","times")
+  accounts[["turnover"]] = turnover
+  return(accounts)
+}
+
+
+
+createAccountsByYear = function(accounts, year) {
+  for(i in 1:length(accounts)) {
+    for (n in 1:length(accounts[[i]])) {
+      dataFrame = accounts[[i]]
+      dateColumnExists = FALSE
+      if(str_detect(names(dataFrame[n]), "date") | str_detect(names(dataFrame[n]), "dateColl")){
+        dateColumn = n
+        dateColumnExists = TRUE
+        break()
+      }
+    }
+    if(dateColumnExists == TRUE) {
+      accounts[[i]]$year = year(accounts[[i]][[dateColumn]])
+      dataFramebyYear = split(accounts[[i]], accounts[[i]][["year"]])
+      accounts[[i]] = dataFramebyYear[[year]]
+    }
+  }
+  return(accounts)
+}
+```
+
+Now, we make use of the above functions to **Filter	Audit	Year-2016's	Transactions** and few rows of the Audit Year-2016's Transactions are displayed below
+
+```{r message=FALSE, warning=FALSE}
+accounts = importAccounts()
+accounts = convertAccounts(accounts)
+accounts2016 = createAccountsByYear(accounts, year = "2016")
+accounts2016 = createCostofGoodsSold(accounts2016)
+accounts2016 = createUnpaidAccountsReceivable(accounts2016)
+accounts2016 = createAllowanceForDoubtfulAccounts(accounts2016)
+#head(accounts2016)
+```
+
+###Questions And Solutions
+
+Now let us have a look at the solutions for the questions posted on Blackboard.  
+
+###**1.PLANNING AND RISK ASSESSMENT**
+
+####**Part 1: High Risk Accounts**
+
+- For ease of understanding, we have displayed it in a tabular format.
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+RISKS <- c("Cash","Accounts Receivable","Inventory","Fixed Assets","Accounts Payable","Cost of Goods Sold",
+"Depreciation Expense","Sales Revenue (net)","Employee Expenses","Allowances for Doubtful Accounts")
+
+IMPACT <- c(5,8,6,8,3,8,5,7,9,6)
+LIKELIHOOD<-c(7,9,8,4,7,5,6,8,7,7)
+RISK_FACTOR<- c(35,72,48,32,21,40,30,56,63,42)
+
+Plan_Risk_Ass <- cbind(RISKS,IMPACT,LIKELIHOOD,RISK_FACTOR)
+Plan_Risk_Ass
+```
+
+- We considered the complete data set for the internal controls and substantive tests. This is because considering the complete dataset would enable us to audit the accounts precisely and efficiently. R Studio is a powerful tool that helped us take the whole dataset into account. 
+
+We also ran a t-test using pwr library and we got the random sample size values for account receivable audit and inventory audit. These are as follows - 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+ara <- 1483718
+ia <- 185774
+Audits <- c("Accounts Receivable Audit", "Inventory Audit")
+Sizes <- c(ara, ia)
+sroo <- cbind(Audits,Sizes)
+sroo
+```
+####**2. TESTS OF INTERNAL CONTROLS**
+
+####**Part(1): Customers who exceeded their Credit Limit**
+
+```{r message=FALSE, warning=FALSE}
+findCreditNegatives = function(accounts) {
+  library(plyr, dplyr)
+  #Prepare Sales table
+  sales = split(accounts$sales, accounts$sales$cashtrue)[["FALSE"]]
+  sales = subset(sales, select = c(date, cust.no, total))
+  names(sales)[names(sales) == "total"] = "trans"
+  sales$trans = sales$trans*-1
+  #Prepare Collections table
+  collections = merge(accounts$sales, accounts$arCollections, by = "invoice", all.x = T)
+  collections = na.omit(collections)
+  collections = subset(collections, select = c(dateColl, cust.no.x, amt.received))
+  names(collections)[names(collections) == "dateColl"] = "date"
+  names(collections)[names(collections) == "amt.received"] = "trans"
+  names(collections)[names(collections) == "cust.no.x"] = "cust.no"
+  #TransactionsTable
+  transTable = rbind(sales, collections)
+  transTable = arrange(transTable, date)
+  #Create TransByCustomer
+  transByCustomer = split(transTable, transTable$cust.no)
+  
+  #Loop through customers
+  badCreditAccount = data.frame()
+  for(i in 1:length(transByCustomer)) {
+    customer = transByCustomer[[i]]
+    customerNumber = transByCustomer[[i]][1,]$cust.no
+    customer$subTotal = accounts$custCredit[as.numeric(customerNumber),]$limit
+    #loop through customer
+    for(n in 1:length(customer$subTotal)) {
+      if(n != 1) {
+        customer[n,]$subTotal = customer[n - 1,]$subTotal + customer[n,]$trans
+        if(sign(customer[n,]$subTotal) == -1) {
+          badCreditAccount = rbind(badCreditAccount, customer[n,])
+          break
+        }
+      }
+    }
+  }
+  accounts[["overlimitCreditApprovals"]] = badCreditAccount
+  return(accounts)
+}
+accounts2016 = findCreditNegatives(accounts2016)
+#head(accounts2016$overlimitCreditApprovals)
+```
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+display_value <- 485
+display_value
+```
+
+- Inference: On performing the above functionality, we arrive at the conclusion that, Number of customers exceeding credit limit sums upto 485.
+
+####**Part (2.a): DUPLICATE TRANSACTIONS**
+
+```{r message=FALSE, warning=FALSE}
+findDuplicates = function(dataframe, column) {
+  dataframe$test = as.numeric(dataframe[[column]])
+  dataframe$dup = duplicated(dataframe$test)
+  x = split(dataframe, dataframe$dup)
+  y = x[["TRUE"]]
+  print(y)
+  print ("Duplicates (head)")
+  head(y)
+}
+findDuplicates(dataframe = accounts2016$sales, column = "invoice")
+```
+
+
+
+####**Part (2.b): OMITTED TRANSACTIONS**
+```{r message=FALSE, warning=FALSE}
+findMissingEntries =function(max,set) {
+  good = 1:max
+  test = as.numeric(set)
+  missing = setdiff(good, set)
+  print(missing)
+  print ("Missing (head)")
+  head(missing)
+}
+#head(findMissingEntries(max = length(accounts2016$sales$invoice), set = accounts2016$sales$invoice))
+```
+
+####**Part (2.c): TRANSACTION CUT OFF TEST** 
+
+```{r message=FALSE, warning=FALSE}
+findSalesNotIn2016 = function(accounts) {
+  x = accounts$sales
+  x$year = year(accounts$sales$date)
+  y = split(x, x$year)
+  z = rbind(y[["2015"]], y[["2017"]])
+  print("Transactions not in 2016")
+  print(z)
+  print ("Transactions not in 2016 (head)")
+  head(z)
+}
+#head(findSalesNotIn2016(accounts))
+```
+
+
+###**Question 3: RECOMPUTE THE TRIAL BALANCE**
+
+####**PART (0)**
+```{r message=FALSE, warning=FALSE}
+accountTotals = function(accounts) {
+  
+  #SALES REVENUE:
+  print("Sales Revenue")
+  totalSalesRevenue = sum(accounts$sales$total)
+  print(totalSalesRevenue)
+  
+  #SALES RETURNS:
+  print("Sales Returns")
+  x = aggregate((returns)*unitprice ~ sku, accounts$inventoryPerpetual, sum)
+  print(sum(x$`(returns) * unitprice`))
+  
+  #COGS:
+  print("COGS")
+  totalCOGS = sum(accounts$costOfGoodsSold$COGS)
+  print(totalCOGS)
+  
+  #ACCOUNTS RECEIVABLE:
+  print("Accounts Receivable")
+  totalAR = sum(accounts$unpaidAccountsReceivable$total)
+  print(sum(accounts$unpaidAccountsReceivable$total))
+  
+  #COLLECTIONS:
+  print("Collections")
+  totalCollections = sum(accounts$arCollections$amt.received)
+  print(totalCollections)
+  
+  #INVENTORY:
+  print("Inventory Perpetual on 1/1/2016")
+  print(sum(accounts$inventoryPerpetual$beginstock))
+  print("Inventory Perpetual on 12/31/2016")
+  print(sum(accounts$inventoryPerpetual$endstock))
+  print("Inventory Perpetual Cost on 1/1/2016")
+  beginInventoryValue = sum(accounts$inventoryPerpetual$unitcost*accounts$inventoryPerpetual$beginstock)
+  print(beginInventoryValue)
+  print("Inventory Perpetual Cost on 12/31/2016")
+  endInventoryValue = sum(accounts$inventoryPerpetual$unitcost*accounts$inventoryPerpetual$endstock)
+  print(endInventoryValue)
+  
+  #PURCHASES:
+  print("Purchases Cost")
+  totalPurchasesCost = sum(accounts$purchases$unitcost*accounts$purchases$quantity)
+  print(totalPurchasesCost)
+  
+  #EMPLOYEE REIMBURSEMENTS:
+  print("Employee Reimbursements total")
+  totalEmployeeReimbursements = sum(accounts$empReimbursements$Amount)
+  print(totalEmployeeReimbursements)
+
+}
+
+accountTotals(accounts2016)
+```
+
+####**PART (1.a): Foot(total)**
+
+- For SALES Foot(total):
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+print("Foot(total) of Sales")
+footTotalOfSales = sum(accounts2016$sales$total)
+print(footTotalOfSales)
+```
+
+
+####**PART (1.b): Statistical summary of the transactions in the datasets**
+```{r message=FALSE, warning=FALSE}
+summarizeAccount = function(accounts) {
+  for(i in 1:length(accounts)){
+    print(names(accounts[i]))
+    print(summary(accounts[[i]]))
+  }
+}
+summarizeAccount(accounts2016)
+```
+
+####**PART (1.c): What does the above results indicate?** 
+
+- The solution for this shall be inferred from the ***Summary.txt*** file, which was generated as output file.
+
+
+
+####**PART (2): Range of dates of sales, purchases and collections**
+
+```{r message=FALSE, warning=FALSE}
+createDailySales = function(accounts) {
+  totalSales = accounts$sales
+  totalSales$amt = totalSales$qty * totalSales$unitprice
+  dailySales = aggregate(amt~date,totalSales,sum)
+  accounts[["dailySales"]] = dailySales
+  return(accounts)
+}
+
+
+createDailyPurchases = function(accounts) {
+  totalPurchases = accounts$purchases
+  totalPurchases$amt = totalPurchases$quantity * totalPurchases$unitcost
+  dailyPurchases = aggregate(amt~date,totalPurchases,sum)
+  accounts[["dailyPurchases"]] = dailyPurchases
+  return(accounts)
+}
+
+
+createDailyCollections= function(accounts) {
+  totalCollections = accounts$arCollections
+  dailyCollections = aggregate(amt.received~dateColl,totalCollections,sum)
+  accounts[["dailyCollected"]] = dailyCollections
+  return(accounts)
+}
+```
+
+####**PART (2.a): Compute the min max quartiles etc:**
+####**PART (2.b): Compute daily averages**
+
+The above questions shall be solved in a simple way by calling the built-in R functions along with the reusable functions which we created. Since both the questions involves a similar approach, we are going to make use of an unified approach to solve the same (as shown below):
+
+```{r message=FALSE, warning=FALSE}
+accounts2016 = createDailySales(accounts2016)
+summary(accounts2016$dailySales)
+accounts2016 = createDailyPurchases(accounts2016)
+summary(accounts2016$dailyPurchases)
+accounts2016 = createDailyCollections(accounts2016)
+summary(accounts2016$dailyCollected)
+```
+
+
+####**PART (2.c): Do	the	ranges	of	dates	of	sales,	purchases	and	collections	lie	within	the	fiscal	year	(2016)	being	audited?**	
+
+From the above, we shall infer that the Range falls within the fiscal year only if filtered data is passed else it doesnot happen.
+
+####**PART (2.d): If	not,	what	corrections	do	you	need	to	make	to	properly	conduct	the	audit	calculations	you	have	made	previously?** 
+
+If the range doesnot fall in the audit year, then apply year filter using **lubridate** feature
+
+####**PART (2.e): Would	any	of	your	computed	account	balances	in	the	Trial	Balance	change	because	of	your	findings?**	
+
+Computed accounts would not change unless the non filtered data set is used.
+
+
+###**Question 3: Employee Expenditure Audit**
+
+####Implementing Benford's Law
+
+```{r message=FALSE, warning=FALSE}
+#Benford test
+accounts2016$empReimbursements$Employee.No = as.integer(accounts2016$empReimbursements$Employee.No)
+accounts2016$empReimbursements$Receipt.No = as.integer(accounts2016$empReimbursements$Receipt.No)
+
+auditEmployeeReim = function(accounts) {
+amtPerEmployee = aggregate(accounts$empReimbursements$Amount, by = list(accounts$empReimbursements$Employee.No), sum)
+names(amtPerEmployee)[names(amtPerEmployee) == "Group.1"] = "employeeNumber"
+names(amtPerEmployee)[names(amtPerEmployee) == "x"] = "Amount"
+employeeAmt50000 = amtPerEmployee[which(amtPerEmployee$Amount>=50000),]
+accounts[["employeeAmt50000"]] = employeeAmt50000
+return(accounts)
+}
+
+accounts2016 = auditEmployeeReim(accounts2016)
+
+print(head(accounts2016$employeeAmt50000))
+```
+
+- Inference: We can see that all the employees have exceeded the spending limit of 50000
+
+```{r message=FALSE, warning=FALSE}
+#Amount
+benford_Emp_amount <- benford(accounts2016$empReimbursements$Amount,number.of.digits = 1, sign = "both", round = 3 )
+benford_Emp_amount
+plot(benford_Emp_amount)
+suspects_amount <- getSuspects(benford_Emp_amount, accounts2016$empReimbursement, how.many=2)
+suspects_amount
+
+
+```
+
+####**Part (3): Predicted vs actual first digits in Receipt and Employee Number columns**
+
+Plots are included in-order to enhance the understandability of the client.
+
+```{r message=FALSE, warning=FALSE}
+#Employee Number
+benford_Emp_EmpNo <- benford(accounts2016$empReimbursements$Employee.No,number.of.digits = 1, sign = "both", round = 3 )
+benford_Emp_EmpNo
+plot(benford_Emp_EmpNo)
+suspects_employee <- getSuspects(benford_Emp_EmpNo, accounts2016$empReimbursement, how.many=2)
+suspects_employee
+
+#Receipts
+benford_Emp_Receipts <- benford(accounts2016$empReimbursements$Receipt.No,number.of.digits = 1, sign = "both", round = 3 )
+benford_Emp_Receipts
+plot(benford_Emp_Receipts)
+
+```
+
+
+####**Part (4): Report any Suspicious findings:**
+
+Suspicious findings are reported below:
+
+```{r message=FALSE, warning=FALSE}
+suspects <- getSuspects(benford_Emp_amount, accounts2016$empReimbursement, how.many=2)
+suspects
+```
+
+###**Question 4: Accounts Receivable Audit**
+
+####**Part (1): UNPAID ACCOUNTS RECEIVABLE**
+```{r message=FALSE, warning=FALSE}
+print("Unpaid Accounts Receivable")
+totalAR = sum(accounts2016$unpaidAccountsReceivable$total)
+print(sum(accounts2016$unpaidAccountsReceivable$total))
+```
+
+
+####**Part (2): ALLOWANCE FOR DOUBTFUL ACCOUNTS**
+```{r message=FALSE, warning=FALSE}
+print("Uncollected Accounts Receivable")
+accounts2016 = createUnpaidAccountsReceivable(accounts2016)
+print(sum(accounts2016$unpaidAccountsReceivable$total))
+print("Allowance for Doubtful Accounts")
+accounts2016 = createAllowanceForDoubtfulAccounts(accounts2016)
+doubtfulTotals = aggregate(total~interval, accounts2016$doubtfulAccounts, sum)
+print(0.3*doubtfulTotals$total[2] + 0.5*doubtfulTotals$total[3])
+```
+
+####**Part (4): SALES CUT OFF TEST**
+
+```{r message=FALSE, warning=FALSE}
+findSalesNotIn2016 = function(accounts) {
+  x = accounts$sales
+  x$year = year(accounts$sales$date)
+  y = split(x, x$year)
+  z = rbind(y[["2015"]], y[["2017"]])
+  print("Transactions not in 2016")
+  print(z)
+  print ("Transactions not in 2016 (head)")
+  head(z)
+}
+#head(findSalesNotIn2016(accounts))
+```
+
+
+
+####**Part (6 a)**
+
+```{r message=FALSE, warning=FALSE}
+d=1000000/333286020
+library(pwr)
+pwr.t.test (n = NULL, d = 0.003, sig.level = 0.05, power = 0.8, type = "one.sample")
+
+mergeSalesAndARConfirmations = function(accounts) {
+  allARAccounts = merge(accounts$arCollections, accounts$arConfirmations, by="invoice", all.x = T)
+  allARAccounts = subset(allARAccounts, select = c(invoice, amt.received.x, amt.received.y))
+  allARAccounts = na.omit(allARAccounts)
+  accounts[["allARConfirmationsAndCollections"]] = allARAccounts
+  return(accounts)
+}
+accounts2016 = mergeSalesAndARConfirmations(accounts2016)
+```
+
+####**Part (6 b):** 
+
+The Percentage Error is given below:
+
+```{r message=FALSE, warning=FALSE}
+sampleConfirmation = accounts2016$allARConfirmationsAndCollections[ppss(accounts2016$allARConfirmationsAndCollection$amt.received.y, 1483718),]
+distinctSampleConfirmation = unique(sampleConfirmation)
+difference = sum(distinctSampleConfirmation$amt.received.y - distinctSampleConfirmation$amt.received.x)
+totalConfirmedAmounts = sum(distinctSampleConfirmation$amt.received.y)
+percentageError = (difference/totalConfirmedAmounts)*100
+percentageError
+```
+
+####**Part (7):** 
+
+- The error percentage i.e. percentage change in audited value against the recorded values is observed to be around 0.029% percent.
+- Since the error is too negligible we can consider it to be more or less accurate
+
+
+
+###**Question 5: Inventory Audit**
+
+####**Part 1:**
+
+The total cost of Goods sold is accounted for the year 2016 and is given below:
+
+```{r message=FALSE, warning=FALSE}
+accounts2016 = createCostofGoodsSold(accounts2016)
+sum(accounts2016$costOfGoodsSold$COGS)
+```
+
+
+####**Part 1 a:**
+
+- The accounting principle which is important in accurately making this calculation is the **Matching Principle**. In accrual accounting, the matching principle states that expenses should be recorded during the period in which they are incurred, regardless of when the transfer of cash occurs.
+
+
+####**Part 2 a:**
+
+The detailed summary of the MarkUp percentages (Max, Min, Quartiles) are computed and shown below:
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+summary((((accounts2016$costOfGoodsSold$qty*accounts2016$costOfGoodsSold$unitprice.x))/accounts2016$costOfGoodsSold$COGS) - 1)
+```
+
+####**Part 3 a: Stocked out**
+
+```{r message=FALSE, warning=FALSE}
+findOutOfStockDemand = function(accounts) {
+  library(plyr)
+  #prepare tables
+  sales = subset(accounts$sales, select = c(sku, date, qty))
+  sales$qty = sales$qty*-1
+  
+  purchases = accounts$purchases
+  purchases$qty = purchases$quantity
+  purchases = subset(purchases, select = c(sku, date, qty))
+  
+  inventoryTrans = rbind(sales, purchases)
+  inventoryTrans = arrange(inventoryTrans, date)
+  
+  #Create dataframe by sku
+  inventoryTransBySku = split(inventoryTrans, inventoryTrans$sku)
+  
+  stockOutSkus = list()
+  for(i in 1:length(inventoryTransBySku)) {
+    sku = inventoryTransBySku[[i]]
+    skuNumber = as.numeric(sku[1,]$sku)
+    sku$onHand = accounts$inventoryPerpetual[skuNumber,]$beginstock
+    
+    for(n in 1:length(sku$qty)) {
+      if(n == 1) {
+        sku[n,]$onHand = sku[n,]$onHand + sku[n,]$qty
+      }
+      else {
+        sku[n,]$onHand = sku[n-1,]$onHand + sku[n,]$qty
+      }
+    }
+    if(sum(sku$onHand < 0) > 0) {
+      stockOutSkus[[length(stockOutSkus) + 1]] = skuNumber
+    }
+    inventoryTransBySku[[i]] = sku
+  }
+  stockOutTrans = data.frame()
+  for(i in 1:length(stockOutSkus)){
+    skuNumber = stockOutSkus[[i]]
+    sku = inventoryTransBySku[[as.character(skuNumber)]]
+    times = which(diff(sign(sku$onHand)) > 0)
+    for(n in 1:length(times)) {
+      stockOutTrans = rbind(stockOutTrans, sku[times[n],])
+    }
+  }
+  accounts[["stockOutTrans"]] = stockOutTrans
+  return(accounts)
+}
+accounts2016 = findOutOfStockDemand(accounts2016)
+accounts2016$stockOutTrans = na.omit(accounts2016$stockOutTrans)
+head(accounts2016$stockOutTrans$sku)
+```
+
+####**Part 4(a)**
+
+```{r message=FALSE, warning=FALSE}
+d=1000000/152765109
+d
+library(pwr)
+pwr.t.test (n = NULL, d = 0.0065, sig.level = 0.05, power = 0.8, type = "one.sample")
+
+mergeInventoryPerpetualAndCounts = function(accounts) {
+  allInventory = merge(accounts$inventoryPerpetual, accounts$inventoryCounts, by="sku", all.x = T)
+  allInventory = subset(allInventory, select = c(sku, beginstock,endstock.x, endstock.y,unitcost,defective.y,returns.y))
+  allInventory = na.omit(allInventory)
+  accounts[["allInventoryMatched"]] = allInventory
+  return(accounts)
+}
+accounts2016 = mergeInventoryPerpetualAndCounts(accounts2016)
+```
+
+####**Part (4 b):** 
+
+The **Percentage Error** is computed and displayed below:
+
+```{r message=FALSE, warning=FALSE}
+sampleConfirmation = accounts2016$allInventoryMatched[ppss(accounts2016$allInventoryMatched$endstock.y, 185774),]
+distinctSampleConfirmation = unique(sampleConfirmation)
+sum(distinctSampleConfirmation$endstock.x)
+difference = sum(distinctSampleConfirmation$endstock.y - distinctSampleConfirmation$endstock.x)
+totalConfirmedAmounts = sum(distinctSampleConfirmation$endstock.y)
+percentageError = (difference/totalConfirmedAmounts)*100
+percentageError
+```
+
+
+####**Part (4 c):**
+
+The inventory is overstatied by 0.24 % and this would impact the balance sheet. But, this would impact only to a minimal extent.
+
+
+####**Part 5: Foot total(inventory accounts balance -> endstock x unitprice)**
+
+```{r message=FALSE, warning=FALSE}
+totalInventoryBalanceAfterAdjusting = sum(accounts2016$allInventoryMatched$endstock.y*accounts2016$allInventoryMatched$unitcost)
+totalInventoryBalanceAfterAdjusting
+```
+
+- From the above, we shall infer that, Difference: $364,104 after computing the inventory counts, this indicates there is a deviation from the stated trial balance value
+
+
+####**Part 6 : Ageing of Inventory**
+
+The aged inventory total is computed and given as follows:
+
+```{r message=FALSE, warning=FALSE}
+createInventoryAgeingData = function(accounts){
+  inventoryAgeing = merge(accounts$sales, accounts$allInventoryMatched, by="sku", all.x=T)
+  inventoryAgeing = subset(inventoryAgeing, select = c(sku, date, qty,unitcost,beginstock,endstock.y,total))
+  inventoryAgeing$COGS = inventoryAgeing$unitcost * inventoryAgeing$qty
+  inventoryAgeing$AvgInvCost = ((inventoryAgeing$endstock.y + inventoryAgeing$beginstock)* inventoryAgeing$unitcost / 2)
+  inventoryAgeing$turnover = inventoryAgeing$COGS/inventoryAgeing$AvgInvCost
+  accounts[["inventoryAgeing"]] = inventoryAgeing
+  return(accounts)
+}
+accounts2016 = createInventoryAgeingData(accounts2016)
+names(accounts2016$inventoryAgeing)[names(accounts2016$inventoryAgeing) == "endstock.y"] = "endstock"
+
+createInventoryAgeingFinal = function(accounts){
+  accountsInventoryAgeingSorted=accounts$inventoryAgeing
+  accountsInventoryAgeingSortedFiltered = sqldf("Select sku, sum(qty) as qty,unitcost,endstock,AvgInvCost from accountsInventoryAgeingSorted group by sku")
+  accountsInventoryAgeingSortedFiltered$COGS = accountsInventoryAgeingSortedFiltered$qty*accountsInventoryAgeingSortedFiltered$unitcost
+  accountsInventoryAgeingSortedFiltered$turnOverRatio = accountsInventoryAgeingSortedFiltered$COGS/accountsInventoryAgeingSortedFiltered$AvgInvCost
+  #accountsInventoryAgeingSortedFiltered = accountsInventoryAgeingSortedFiltered[!(accountsInventoryAgeingSortedFiltered$turnOverRatio==0),]
+  accountsInventoryAgeingSortedFiltered$age = 365 / accountsInventoryAgeingSortedFiltered$turnOverRatio
+  accounts[["inventoryAgeingFinal"]] = accountsInventoryAgeingSortedFiltered
+  return(accounts)
+}
+accounts2016 = createInventoryAgeingFinal(accounts2016)
+accounts2016_backup = accounts2016
+
+#head(accounts2016$inventoryAgeingFinal)
+effectiveCostUnderSixty=0
+effectiveCostOverSixtyLessOneEighty=0
+effectiveCostOver180Less365=0
+effectiveCostOver365=0
+i=as.integer()
+accounts2016$inventoryAgeingFinal$age = as.numeric(accounts2016$inventoryAgeingFinal$age)
+#na.omit(accounts2016$inventoryAgeingFinal)
+
+inventoryAgeingCheckData = accounts2016$inventoryAgeingFinal
+#inventoryAgeingCheckData[complete.cases(inventoryAgeingCheckData),]
+
+
+for (i in 1:2000){
+  #print(i)
+  #print(accounts2016$inventoryAgeingFinal$age[i])
+  if(is.na(accounts2016$inventoryAgeingFinal$age[i])){
+    next
+  }
+  if(accounts2016$inventoryAgeingFinal$age[i] < 60){
+    effectiveCostUnderSixty = effectiveCostUnderSixty + (accounts2016$inventoryAgeingFinal$unitcost[i]*accounts2016$inventoryAgeingFinal$endstock[i])
+  }else
+    if(accounts2016$inventoryAgeingFinal$age[i]>=60 && accounts2016$inventoryAgeingFinal$age[i]<180){
+      effectiveCostOverSixtyLessOneEighty = effectiveCostOverSixtyLessOneEighty + (0.50)*(accounts2016$inventoryAgeingFinal$unitcost[i]*accounts2016$inventoryAgeingFinal$endstock[i])
+    }else
+      if(accounts2016$inventoryAgeingFinal$age[i]>=180 && accounts2016$inventoryAgeingFinal$age[i]<365){
+        effectiveCostOver180Less365 = effectiveCostOver180Less365 + (accounts2016$inventoryAgeingFinal$unitcost[i]*accounts2016$inventoryAgeingFinal$endstock[i])
+      }else{
+        effectiveCostOver365 = effectiveCostOver365 + (accounts2016$inventoryAgeingFinal$unitcost[i]*accounts2016$inventoryAgeingFinal$endstock[i])
+      }
+}
+
+agedInventoryTotal = effectiveCostUnderSixty + effectiveCostOverSixtyLessOneEighty + effectiveCostOver180Less365 + effectiveCostOver365
+agedInventoryTotal
+```
+
+The computed value for **effectiveCostUnderSixty** is given below:
+
+```{r message=FALSE, warning=FALSE}
+effectiveCostUnderSixty
+```
+
+The computed value for **effectiveCostOverSixtyLessOneEighty** is given below:
+
+```{r message=FALSE, warning=FALSE}
+effectiveCostOverSixtyLessOneEighty
+```
+
+The computed value for **effectiveCostOver180Less365** is given below:
+```{r message=FALSE, warning=FALSE}
+effectiveCostOver180Less365
+```
+
+The computed value for **effectiveCostOver365** is given below:
+```{r message=FALSE, warning=FALSE}
+effectiveCostOver365
+```
+
+####**Part 6 a**
+
+The Percentage of total less than 60
+```{r message=FALSE, warning=FALSE}
+percentageOfTotalLess60 = (effectiveCostUnderSixty/agedInventoryTotal)*100
+percentageOfTotalLess60
+```
+
+####**Part 6 b**
+
+The Percentage of total computed for the range between 60 and 180
+```{r message=FALSE, warning=FALSE}
+percentageOfTotalOver60Less180 = (effectiveCostOverSixtyLessOneEighty/agedInventoryTotal)*100
+percentageOfTotalOver60Less180
+```
+
+
+####**Part 6 c**
+
+The Percentage of total computed for the range between 180 and 365
+
+```{r message=FALSE, warning=FALSE}
+percentageOfTotalOver180Less365 = (effectiveCostOver180Less365/agedInventoryTotal)*100
+percentageOfTotalOver180Less365
+```
+
+
+####**Part 6 d**
+
+The Percentage of total computed for the range above 365
+
+```{r message=FALSE, warning=FALSE}
+percentageOfTotalOver365 = (effectiveCostOver365/agedInventoryTotal)*100
+percentageOfTotalOver365
+```
+
+####**Part 7:**
+```{r message=FALSE, warning=FALSE, results='hide'}
+counter=0
+for(i in 1:2000){
+  if(is.na(accounts2016$inventoryAgeingFinal$COGS[i])){
+    print("NA")
+    print(i)
+    print("NA")
+    next
+  }
+if((accounts2016$inventoryAgeingFinal$COGS[i]/accounts2016$inventoryAgeingFinal$endstock[i]) < 10){
+    print(accounts2016$inventoryAgeingFinal$sku[i])
+    counter=counter+1
+}
+}
+counter
+```
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+counter
+```
+
+- Inference : There are a total of 628 unique SKUs that had a turnover	of	less	than	10	times.	
+
+####**Part 8: Market Test Inventory**
+```{r message=FALSE, warning=FALSE}
+marketTestInventory = function(accounts)
+{
+  inventoryPerpMarketTest = subset(accounts$inventoryPerpetual, select = c(sku, unitprice, unitcost))
+  InventoryMarketTest = merge(accounts$inventoryCounts,inventoryPerpMarketTest,by="sku")
+  InventoryMarketTest$diff = (InventoryMarketTest$unitprice-InventoryMarketTest$unitcost) * InventoryMarketTest$endstock
+  accounts[["InventoryMarketTest"]] = InventoryMarketTest
+  return(accounts)
+}
+
+accounts2016 = marketTestInventory(accounts2016)
+
+#print(head(accounts2016$InventoryMarketTest[InventoryMarketTest$diff < 0,]))
+#NULL
+```
+
+####**Part 9 and 10 (Preface)**
+```{r message=FALSE, warning=FALSE}
+salesInventoryMerge = merge(accounts2016$sales,accounts2016$allInventoryMatched,by="sku")
+aggregateQuantity=aggregate(salesInventoryMerge$qty,by=list(salesInventoryMerge$sku),sum)
+names(aggregateQuantity)[names(aggregateQuantity) == "Group.1"] = "sku"
+names(aggregateQuantity)[names(aggregateQuantity) == "x"] = "qty"
+head(salesInventoryMerge)
+head(aggregateQuantity)
+salesInventoryMerge = merge(salesInventoryMerge[,c('sku','unitprice','unitcost','beginstock','endstock.y')],aggregateQuantity,by="sku")
+salesInventoryMerge=unique((salesInventoryMerge))
+head(salesInventoryMerge)
+```
+
+####**Part 9:**
+
+- Nrv < cost where NRV = unitprice - costprice - otherexpenses(which is zero in this case)
+```{r message=FALSE, warning=FALSE, results='hide'}
+counter=0
+for(i in 1:2000){
+  if(is.na(salesInventoryMerge$unitprice[i]) | is.na(salesInventoryMerge$unitcost[i])){
+    print("NA")
+    print(i)
+    print("NA")
+    next
+  }
+  if((salesInventoryMerge$unitprice[i]-(salesInventoryMerge$unitcost[i])) < salesInventoryMerge$unitcost[i]){
+    print(salesInventoryMerge$sku[i])
+    counter=counter+1
+  }
+}
+counter
+```
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+counter
+```
+- Inference: We arrive at the conclusion that, **433 inventory items** have Net Realizable value less than cost.
+
+####**Part 10:** 
+
+- NRV < 110% of cost where NRV = unitprice - costprice - otherexpenses(which is salescommission=10% of unitcost)
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+counter=0
+for(i in 1:2000){
+  if(is.na(salesInventoryMerge$unitprice[i]) | is.na(salesInventoryMerge$unitcost[i])){
+    print("NA")
+    print(i)
+    print("NA")
+    next
+  }
+  if((salesInventoryMerge$unitprice[i] - salesInventoryMerge$unitcost[i] - (0.1 * salesInventoryMerge$unitcost[i])) < (1.1 * salesInventoryMerge$unitcost[i])){
+    print(salesInventoryMerge$sku[i])
+    counter=counter+1
+  }
+}
+counter
+```
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+counter
+```
+
+- Inference: We arrive at the conclusion that, **587 inventory items** have Net Realizable value less than 110% of the cost and Sales Commission that are 10% of cost.
+
+**Notes for Questions 5 - Part 9 and 10** 
+
+- If this calculation does result in a loss, you should charge the loss to the cost of goods sold expense with a debit, and credit the #inventory account to reduce the value of the inventory account. If the loss is material, you may want to segregate it in a separate #loss account, which more easily draws the attention of a reader of a company's financial statements.
+
+- Net realizable value is actually only one of the factors you consider in determining the lower of cost or market, so see the Lower of #Cost or Market article for a complete explanation.
+
+- Net realizable value can also refer to the aggregate total of the ending balances in the trade accounts receivable account and the #offsetting allowance for doubtful accounts. This net amount represents the amount of cash that management expects to realize once it #collects all outstanding accounts receivable.
+
+
+
+####**Part 11 and 12**
+
+```{r message=FALSE, warning=FALSE}
+purchasePerSKU = arrange(accounts2016$purchases,accounts2016$purchases$sku)
+purchasePerSKU = subset(purchasePerSKU, select = c(sku, quantity))
+purchasePerSKU = aggregate(purchasePerSKU$quantity,by=list(purchasePerSKU$sku),sum)
+names(purchasePerSKU)[names(purchasePerSKU) == "Group.1"] = "sku"
+names(purchasePerSKU)[names(purchasePerSKU) == "x"] = "quantity"
+#purchasePerSKU
+mergedPurchaseAndInventory = merge(purchasePerSKU,accounts2016$allInventoryMatched,by="sku")
+mergedPurchaseAndInventory = subset(mergedPurchaseAndInventory, select = c(sku,quantity,beginstock,returns.y,defective.y))
+mergedPurchaseAndInventory$defectiveRate = (mergedPurchaseAndInventory$defective.y / (mergedPurchaseAndInventory$quantity))*100
+sum(mergedPurchaseAndInventory$defectiveRate > 1)
+mergedPurchaseAndInventory$returnRate = (mergedPurchaseAndInventory$returns.y / (mergedPurchaseAndInventory$quantity))*100
+sum(mergedPurchaseAndInventory$returnRate > 1)
+
+
+salesPerSKU = aggregate(accounts2016$sales$qty,by=list(accounts2016$sales$sku),sum)
+names(salesPerSKU)[names(salesPerSKU) == "Group.1"] = "sku"
+names(salesPerSKU)[names(salesPerSKU) == "x"] = "quantity"
+mergedSalesAndInventory = merge(salesPerSKU,accounts2016$allInventoryMatched,by="sku")
+mergedSalesAndInventory = subset(mergedSalesAndInventory, select = c(sku,quantity,beginstock,returns.y,defective.y))
+mergedSalesAndInventory$defectiveRate = (mergedSalesAndInventory$defective.y / (mergedSalesAndInventory$quantity))*100
+sum(mergedSalesAndInventory$defectiveRate > 1)
+mergedSalesAndInventory$returnRate = (mergedSalesAndInventory$returns.y / (mergedSalesAndInventory$quantity))*100
+sum(mergedSalesAndInventory$returnRate > 2)
+```
