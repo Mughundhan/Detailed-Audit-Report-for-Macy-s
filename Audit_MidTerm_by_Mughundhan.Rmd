@@ -1,0 +1,549 @@
+---
+title: "Audit MidTerm - UIN 662895444"
+author: "Mughundhan Chandrasekar"
+date: "3/20/2017"
+output:
+  word_document: default
+  html_document: default
+---
+
+###**Question 1.**
+**Compute the Trial Balance account entries from the datasets provided by management for LSI???s accounts at December 31, 2016 for the following six accounts:** 
+*Sales Revenue
+*Cost of Goods Sold 
+*Unpaid Accounts Receivable  
+*Allowance for Doubtful Accounts 
+*Inventory on hand at 12/31/2016
+
+
+Solution - Work done using the following R code which is self-explanatory
+
+**Creating an appropriate environment**
+```{r warning=FALSE, message=FALSE}
+library(formattable)
+library(scales)
+library(lubridate)
+library("pastecs")
+setwd("/Users/Mughundhan/UIC/UIC Academics/SPRING 2017/AUDIT/Mid Term")
+collections <- read.csv("collections.csv", header = T)
+credit <- read.csv("credit.csv", header = T)
+inventory <- read.csv("inventory.csv", header = T)
+purchases <- read.csv("purchases.csv", header = T)
+sales <- read.csv("sales.csv", header = T)
+```
+
+**Sales Revenue**
+```{r warning=FALSE, message=FALSE}
+audityear = interval(ymd(20160101), ymd(20161231)) #Data inferred from Summary
+sales$datep = as_date(sales$date) #Type Casting for computational ease
+sales$year = year(sales$datep)
+salesA = split(sales,sales$year)$'2016'
+sales.audit.year = split(sales, sales$year)
+summary(sales.audit.year)
+head(salesA) #Top 6 entries
+total_2016_Sales = sum(salesA$total)
+total_2016_Sales
+```
+
+**Inventory**
+```{r warning=FALSE, message=FALSE}
+inventory_cost = sum(inventory$unitcost*inventory$endstock)
+inventory_cost
+```
+
+**Cost of Goods Sold**
+```{r warning=FALSE, message=FALSE}
+CGS1=merge(salesA,inventory,by="sku")
+head(CGS1)
+sum (CGS1$qty*CGS1$unitcost)
+```
+
+**Work done related to "Cash"**
+```{r warning=FALSE, message=FALSE}
+cash_true_temp = sales[sales$cashtrue =='1',]
+head(cash_true_temp)
+sum(cash_true_temp$total)
+```
+
+**Generic computations related to purchases**
+```{r warning=FALSE, message=FALSE}
+audityear = interval(ymd(20160101), ymd(20161231))
+purchases$datep = as_date(purchases$date)
+purchases$year = year(purchases$datep)
+purchasesA = split(purchases,purchases$year)$'2016'
+head(purchasesA)
+```
+
+**Generic computations related to collections**
+```{r warning=FALSE, message=FALSE}
+audityear = interval(ymd(20160101), ymd(20161231))
+collections$datep = as_date(collections$date)
+collections$year = year(collections$datep)
+collectionsA = split(collections,collections$year)$'2016'
+head(collectionsA)
+```
+
+**Work done related to "Unpaid Accounts Receivable"**
+```{r warning=FALSE, message=FALSE}
+
+accountsReceivable=merge(salesA,collectionsA,by="invoice",all.x = TRUE)
+head(accountsReceivable)
+
+accountsReceivable$collected[is.na(accountsReceivable$collected)]<-0
+accountsReceivable$collected[accountsReceivable$collected<0]<-0
+
+cashamt = sum(accountsReceivable$collected)
+cashamt
+
+cashamt1 = sum(accountsReceivable$total)
+cashamt1
+
+differencecashamt = cashamt1 - cashamt
+differencecashamt
+```
+
+**Work done related to "Allowance for Doubtful Accounts"**
+```{r warning=FALSE, message=FALSE}
+allowancetable = accountsReceivable
+head(allowancetable)
+allowancetable$ar<-(allowancetable$total-allowancetable$collected)
+head(allowancetable)
+allowancetable$ardueperiod<-as.Date(as.character("2016-12-31"),format="%Y-%m-%d")-as.Date(as.character(allowancetable$date.x),format="%Y-%m-%d")
+allowancetableRefined <- allowancetable[allowancetable$ar>0,]
+head(allowancetableRefined)
+```
+
+Since the execution of the conditional for loop takes a long time, the value was computed and printed as below. The code used to infer this solution is included.
+```{r eval=FALSE}
+for (i in 1:nrow(allowancetableRefined))
+{
+  if(allowancetableRefined$ardueperiod[i]>180){
+    allowancetableRefined$allowanceamt[i] = 0.4*allowancetableRefined$ar[i]
+  }else if(allowancetableRefined$ardueperiod[i]>=90 && allowancetableRefined$ardueperiod[i]<=180){
+    allowancetableRefined$allowanceamt[i] = 0.2*allowancetableRefined$ar[i]
+  }else{
+    allowancetableRefined$allowanceamt[i] = 0
+  }
+}
+
+sum(allowancetableRefined$allowanceamt)
+69,273,535
+```
+
+###**Question 2.**
+All of LSI???s transaction documents and journal entries are sequentially numbered with a unique identifier (Sales Invoice Number; Purchase Order Number; Cash Receipt Number, SKU).  Perform the following audit program tests of the Revenue Cycle for all transactions during the 2016 fiscal year:  		
+
+**2.1. Foot (total) and agree to Trial Balance**
+```{r warning=FALSE, message=FALSE}
+sum(salesA$total) #Gives the foot (total)
+```
+Based on the value of foot(total), we shall disagree with the Trial Balance
+
+**2.2. Statistically summarize the transactions in the datasets **
+This gives a quick and simple description of the data which includes mean, median, mode, minimum value, maximum value, range, standard deviation, etc.
+```{r}
+summary(collections)
+summary(credit)
+summary(inventory)
+summary(purchases)
+summary(sales)
+str(collections)
+str(credit)
+str(inventory)
+str(purchases)
+str(sales)
+```
+
+###**QUESTION 3.**
+**Determine the range of dates of sales, purchases and collections and compute:**
+```{r}
+salesRange <- range(as_date(sales$date))
+collectionsRange <- range(as_date(collections$date))
+purchasesRange <- range(as_date(purchases$date))
+salesRange
+collectionsRange
+purchasesRange
+```
+
+**3.1. Compute the minimum, maximum, 1st  and 3rd  quartiles for the markup percentages on LSI???s sales, purchasing and collections transactions**
+
+**Minimum, Maximum, 1st and 3rd Quartiles for Sales**
+```{r warning=FALSE, message=FALSE}
+#Pertaining to the Date
+summary(as_date(sales$date))
+
+#Markup Perentages Summary
+sales_markup=merge(sales,inventory,by="sku")
+sales_markup$markup_value = (sales_markup$unitprice.x/sales_markup$unitcost)-1
+summary (sales_markup$markup_value)
+```
+
+**Minimum, Maximum, 1st and 3rd Quartiles for Collections**
+```{r warning=FALSE, message=FALSE}
+
+#Pertaining to the Date
+summary(as_date(collections$date))
+
+#Markup Perentages Summary
+collections_markup=merge(collections,sales,by="invoice")
+collections_markupA=merge(collections_markup,inventory, by="sku")
+collections_markupA$markup_value = (collections_markupA$unitprice.x/collections_markupA$unitcost)-1
+summary (collections_markupA$markup_value)
+```
+
+**Minimum, Maximum, 1st and 3rd Quartiles for Purchases**
+
+```{r warning=FALSE, message=FALSE}
+#Pertaining to the Date
+summary(as_date(purchases$date))
+
+#Markup Perentages Summary
+purchases_markup=merge(purchases,inventory,by="sku")
+purchases_markup$markup_value = (purchases_markup$unitprice/purchases_markup$unitcost.x)-1
+summary (purchases_markup$markup_value)
+```
+
+**3.2. Compute the daily averages for sales, purchases and collections transactions**
+```{r warning=FALSE, message=FALSE}
+sales$amt = sales$qty * sales$unitprice
+salesagg = aggregate(amt~date,sales,sum) 
+head(salesagg)
+summary(salesagg$amt) #Average number of sales per day
+
+purchases$amt = purchases$unitcost*purchases$quantity
+purchasesagg = aggregate(amt~date,purchases,sum) 
+summary(purchasesagg$amt)
+
+collectionsagg = aggregate(collected~date,collections,sum) 
+summary(collectionsagg$collected)
+```
+
+**3.3. Do the ranges of dates of sales, purchases and collections lie within the fiscal year (2016) being audited?**
+```{r eval=FALSE}
+#To prove that different year datas are present
+sales.audit.year = split(sales,sales.audit.year)
+summary(sales.audit.year)
+Length Class      Mode
+2015 12     data.frame list
+2016 12     data.frame list
+2017 12     data.frame list
+
+purchases.audit.year = split(purchases,purchases$year)
+purchases.audit.year = split(purchases,purchases.audit.year)
+summary(purchases.audit.year)
+Length Class      Mode
+2016   9      data.frame list
+
+collections.audit.year = split(collections,collections$year)
+collections.audit.year = split(collections,collections.audit.year)
+summary(collections.audit.year)
+Length Class      Mode
+2015   7      data.frame list
+2016   7      data.frame list
+2017   7      data.frame list
+```
+It is pretty much evident that the ranges of dates of sales, purchases and collections DONOT lie within the fiscal year (2016)
+
+**3.4. If not, what corrections do you need to make to properly conduct the audit calculations you have made previously?** 
+We have to get the data of the audit year 2016 alone and compute the values. To extract the 2016 data of sales, we need to make use of the following R code :
+```{r warning=FALSE, message=FALSE}
+sales$datep = as_date(sales$date) #Type Casting for computational ease
+sales$year = year(sales$datep)
+salesA = split(sales,sales$year)$'2016'
+head(salesA)
+```
+
+**3.5. Would any of your computed account balances in the Trial Balance change because of your findings?**
+The value of records (pertaining to computed account balances in the Trial Balance) in sales, accounts receivable, inventory and allowance for doubtful accounts would change
+
+###**QUESTION 4.**
+**Perform the following audit program tests to determine the integrity of internal controls in LSI???s Revenue Cycle for all Sales transactions during the 2016 fiscal year:**  		
+
+**4.1. Find any Duplicate transactions (i.e., where an Invoice sequence number appears more than once)**
+```{r}
+anyDuplicated(salesA$invoice, incomparables = FALSE, fromLast = FALSE)
+```
+Thus, we can infer that there are no duplications.
+
+**4.2. Find any Omitted transactions (i.e., where one or more Invoice sequence numbers have been skipped)**
+
+```{r}
+checklist <- seq(1, 1300000, by = 1) #In-order to verify whether all 1300000 entries are present
+head(checklist[!match(checklist,salesA$invoice,nomatch=FALSE)],20)
+head(salesA$invoice,20)
+```
+Thus, we can infer that there are many (over 0.25 million) ommitted entries. For eg : The entries 9,12,13 (to name a few) are not found in the given dataset.
+
+**4.3. Perform a Sales Cutoff test, i.e., sales transactions listed as sales in on audit period (2016) but where ownership changed in another (reflected by a date of sale not in 2016)**
+
+```{r}
+sales$datep = as_date(sales$date) #Type Casting for computational ease
+sales$year = year(sales$datep)
+sales2015 <- split(sales,sales$year)$'2015'
+sales2016 <- split(sales,sales$year)$'2016'
+sales2017 <- split(sales,sales$year)$'2017'
+```
+
+*Number of sales transactions NOT listed as sales in audit period (2016)*
+```{r}
+salesNOT2016 <- nrow(sales2015) + nrow(sales2017)
+salesNOT2016
+```
+
+*Number of sales transactions listed as sales in audit period (2016)*
+```{r}
+salesIN2016 <- nrow(sales2016)
+salesIN2016
+head(sales2016) #To view first 6 rows
+```
+
+**The Sales Cutoff test**
+```{r}
+cbind(salesIN2016, salesNOT2016)
+collections2017 <- split(collections,collections$year)$'2017'
+collections_sales <- merge(collections2017,sales2016,by="invoice")
+head(collections_sales)
+```
+
+###**QUESTION 5.**
+**Compute and explain how you computed LSI???s Cost of Goods Sold?**
+
+**5.1. What accounting principal was important in accurately making this calculation?**
+The accounting principle which is important in accurately making this calculation is the **Matching Principle**. In accrual accounting, the matching principle states that expenses should be recorded during the period in which they are incurred, regardless of when the transfer of cash occurs.
+
+**5.2. What is the average markup on LSI???s inventory items?**
+The solution below displays the summary of LSI's inventory items with average markup as well as without average markup.
+```{r eval=FALSE}
+CGS=merge(salesA,inventory,by="sku")
+#sum(CGS$qty*CGS$unitcost)
+#sum (CGS$amt)
+sum (CGS$amt)/ sum(CGS$qty*CGS$unitcost)
+0.1736
+```
+**We can infer that the Markup is 173.6 percent from the above code chunk**
+
+**5.3. Compute the minimum, maximum, 1st  and 3rd  quartiles for the markup percentages on LSI???s inventory items**
+```{r eval=FALSE}
+inventory$amt=inventory$unitcost*inventory$endstock
+View (inventory)
+summary (inventory$amt)
+Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+  0   40890   67980   76380  103800  261600 
+
+#Based on markup percentages
+inventory$markupvalue = ((inventory$unitprice/(inventory$unitcost))-1)
+summary(inventory$markupvalue)
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max.    NA's 
+0.5026  1.0770  1.7400  1.7380  2.3730  3.0000       1 
+```
+
+###**QUESTION 6.**
+**6.1. Compute the balance of unpaid Accounts Receivables (A/R) at 12/31/2016 from the datasets given to you.** 
+The following code computes the balance of unpaid
+```{r warning=FALSE, message=FALSE}
+
+accountsReceivable=merge(salesA,collectionsA,by="invoice",all.x = TRUE)
+head(accountsReceivable)
+
+accountsReceivable$collected[is.na(accountsReceivable$collected)]<-0
+accountsReceivable$collected[accountsReceivable$collected<0]<-0
+
+cashamt = sum(accountsReceivable$collected)
+cashamt
+
+cashamt1 = sum(accountsReceivable$total)
+cashamt1
+
+differencecashamt = cashamt1 - cashamt
+differencecashamt
+```
+
+**6.2.	Age the Accounts Receivables.  The current balance in Allowance for Uncollectable Accounts Receivable  is zero.  Add to Allowance for Uncollectable Accounts Receivable the following percentages of Unpaid A/R:**
+1.	**<90 days old 0%**
+2.	**90-180 days old 20% of A/R**
+3.	**>180 days old 40% of A/R**
+
+```{r eval=FALSE}
+for (i in 1:nrow(allowancetableRefined))
+{
+  if(allowancetableRefined$ardueperiod[i]>180){
+    allowancetableRefined$allowanceamt[i] = 0.4*allowancetableRefined$ar[i]
+  }else if(allowancetableRefined$ardueperiod[i]>=90 && allowancetableRefined$ardueperiod[i]<=180){
+    allowancetableRefined$allowanceamt[i] = 0.2*allowancetableRefined$ar[i]
+  }else{
+    allowancetableRefined$allowanceamt[i] = 0
+  }
+}
+
+sum(allowancetableRefined$allowanceamt) 
+69,273,535
+```
+
+###**QUESTION 7**
+**LSI, Inc is a high-end retailer, and preapproves customers for credit sale.   Find any customers who have exceeded their limit (Customer Credit Limit dataset) at any time during the audit year (2016), and report the date and amount by which the limit is exceeded.   How does this information influence your audit report, and where would you write-up this problem?**
+
+```{r eval=FALSE}
+
+audityear <- interval(ymd(20160101), ymd(20161231))
+sales$datep <- as_date(sales$date)
+sales$year <- year(sales$datep)
+Audit_Sales <- split(sales,sales$year)$'2016'
+
+audityear <- interval(ymd(20160101), ymd(20161231))
+collections$datep <- as_date(collections$date)
+collections$year <- year(collections$datep)
+Audit_Collections <- split(collections,collections$year)$'2016'
+```
+
+**Renaming the Columns and Merging the datasets for computational ease**
+```{r eval=FALSE}
+colnames(Audit_Sales)[6]<- "Sales_Date"
+colnames(Audit_Collections)[4]<-"Collection_Date"
+colnames(Audit_Credit)[2] <- "cust.no"
+
+
+m1 = merge(Audit_Collections, Audit_Sales, by="invoice",all.y = TRUE)
+m1<-arrange(m1,cust.no,Collection_Date)
+
+m2 = merge(Audit_Credit, Audit_Sales, by="cust.no",all.y = TRUE)
+m2<-arrange(m2,cust.no,Sales_Date)
+```
+
+**Running iterations for computing the transactions**
+```{r eval=FALSE}
+transactions<- m1[0,]
+uniqueCustIds<-unique(m1$cust.no)
+exceededBy<-data.frame(cust.no=0,invoice=0,currentCredit=0)
+m1$collected[m1$collected<0]<-0
+
+for(c in 1:nrow(tempCust1)) {
+  tempCust1<-m1[(m1$cust.no==uniqueCustIds[c]),]
+  tempCust2<-m2[(m2$cust.no==uniqueCustIds[c]),]
+  
+  tempCust1<-arrange(tempCust1,Collection_Date)
+  tempCust2<-arrange(tempCust2,Sales_Date)
+  
+  creditLimitForTheParticularCustomer<-tempCust2[1,]$limit
+  maxCredit<-creditLimitForTheParticularCustomer
+  
+  prevSalesDate<-tempCust2[1,]$Sales_Date
+  previousSalesDate<-as.POSIXct(prevSalesDate)
+  
+  for(i in 1:nrow(tempCust1)) {
+    
+    creditLimitForTheParticularCustomer<-creditLimitForTheParticularCustomer-tempCust2[i,]$total
+    
+    
+    currentSalesDate<-as.POSIXct(tempCust2[i,]$Sales_Date)
+    tempCust1$Collection_Date<-as.POSIXct(tempCust1$Collection_Date)
+    if(is.na(tempCust1[i,]$Collection_Date)){
+      collection<- tempCust1[0,]
+    }else{
+      collection<-tempCust1[(tempCust1[i,]$Collection_Date>previousSalesDate&&tempCust1[i,]$Collection_Date<=currentSalesDate), ]
+    }
+    
+    if(nrow(collection)>0){
+      colAmt<-sum(collection$collected)
+    }else{
+      colAmt<-0
+    }
+    
+    creditLimitForTheParticularCustomer<-creditLimitForTheParticularCustomer+colAmt
+    
+    if(creditLimitForTheParticularCustomer>maxCredit){
+      creditLimitForTheParticularCustomer<-maxCredit
+    }
+    
+    if(creditLimitForTheParticularCustomer<0) {
+      transactions <- rbind(transactions, tempCust2[i,])
+      
+      exceededBy<-rbind(exceededBy,c(tempCust2[i,]$cust.no,tempCust2[i,]$invoice,creditLimitForTheParticularCustomer))
+    }
+    previousSalesDate<-currentSalesDate
+  }
+}
+```
+
+**Merging datasets and performing appropriate arrangements in-order to create the output file**
+```{r eval=FALSE}
+exceededBy<-exceededBy[-1,]
+transactions1 = merge(transactions, exceededBy, by=c("invoice","cust.no"),all.x = TRUE)
+transactions1<-arrange(transactions1,cust.no,Sales_Date)
+
+write.csv(transactions1, file = "transactions1.csv")
+```
+
+###**QUESTION 8.**
+**When an inventory item is not available in stock, LSI salespeople will complete the sale and place the item on backorder to be delivered to the customer when the stock arrives.**
+
+**8.1. Has LSI, Inc. ???stocked out??? of any Inventory SKUs during the fiscal year (i.e., sold the item but had to backorder it since it was not in inventory at the time of the sale)?**
+*Yes, LSI, Inc. has been "stocked out" for many Inventory SKUs during the fiscal year 2016.
+
+
+**8.2. Write a list of SKUs??? that have stocked out, when they stocked out and how much was the excess demand over inventory before the next shipment of inventory was received.  Shipments are received at the beginning of the month, and the Purchase Order is dated on the date that inventory orders are received into inventory.**  
+
+**Computing the number of unique instances of Sales (based on sku's aggregate)**
+```{r warning=FALSE, message=FALSE}
+sales2016$month <- month(sales2016$date)
+summary(sales2016)
+sales2016$sku <- as.character(sales2016$sku)
+
+#SKU of all sales
+salesbySkuAggregate <- aggregate(qty~sku+month, sales2016, sum)
+nrow(salesbySkuAggregate)
+colnames(salesbySkuAggregate)[3] <- "quantity_sold" #Renaming for computational ease
+```
+
+**Computing the Stockout/backorder as well as the Number of distinct instances**
+```{r warning=FALSE, message=FALSE}
+
+#Every order is fullfilled the following month after current month
+purchases <- purchases[,-c(1)]
+purchases$month <- month(purchases$date) + 1
+head(purchases)
+purchases$sku <- as.character(purchases$sku)
+colnames(purchases)[3]<-"quantity_fullfilled"
+
+#SKU of all the purchases
+purchasesSkuAggregate <- aggregate(quantity_fullfilled~sku+month,purchases,sum)
+purchasesSales <- merge(salesbySkuAggregate,purchasesSkuAggregate,by=c('sku','month'), all.x = T)
+inventory$month <- 1
+
+#aggregating by sku and respective month
+aggregateMonth<-merge(purchasesSales,y=inventory[,c('beginstock','sku','month')],by=c('sku','month'),all.x = T)
+aggregateMonth$quantity_fullfilled[is.na(aggregateMonth$quantity_fullfilled)] <- 0
+aggregateMonth$beginstock[is.na(aggregateMonth$beginstock)] <- 0
+
+#Now, sort by month to understand the levels of backorder
+aggregateMonth<-aggregateMonth[with(aggregateMonth,order(aggregateMonth[,2])),]
+
+#Calculating if there is stockout at the end of each month
+for(i in 1:length(aggregateMonth$sku)){
+  eachMonth<- aggregateMonth$month[i]
+  newSku<-aggregateMonth$sku[i]
+  nrow(aggregateMonth)
+  aggregateMonth$onhand[i]<-aggregateMonth$beginstock[i]+aggregateMonth$quantity_fullfilled[i]-aggregateMonth$quantity_sold[i]
+  aggregateMonth<- within(aggregateMonth,beginstock[sku==newSku & month == eachMonth+1]<-aggregateMonth$onhand[i])
+}
+stockout<-aggregateMonth[aggregateMonth$onhand<0,c(1,2,6)]
+nrow(stockout) 
+length(unique(stockout$sku))
+```
+Thus we can infer that there are 354 stockout/bordorder and 86 unique instances of stockout
+
+**Computing the Excess Demand in each month and returning it as a table for better understandability**
+```{r warning=FALSE, message=FALSE}
+stockout$month[stockout$month == 1] <- 'January' 
+stockout$month[stockout$month == 2] <- 'February'                                 
+stockout$month[stockout$month == 3] <- 'March'                                    
+stockout$month[stockout$month == 4] <- 'April'                                    
+stockout$month[stockout$month == 5] <- 'May'                                      
+stockout$month[stockout$month == 6] <- 'June'                                     
+stockout$month[stockout$month == 7] <- 'July'                                     
+stockout$month[stockout$month == 8] <- 'August'                                   
+stockout$month[stockout$month == 9] <- 'September'                                
+stockout$month[stockout$month == 10] <- 'October'                                  
+stockout$month[stockout$month == 11] <- 'November'                                 
+stockout$month[stockout$month == 12] <- 'December' 
+table(stockout$month)	
+```

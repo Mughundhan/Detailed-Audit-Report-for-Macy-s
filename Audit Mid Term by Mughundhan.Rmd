@@ -1,0 +1,134 @@
+---
+title: "Audit Mughundhan"
+author: "Mughundhan"
+date: "3/20/2017"
+output: html_document
+---
+
+1.	(15 points) Compute the Trial Balance account entries from the datasets provided by management for LSI???s accounts at December 31, 2016 for the following six accounts: 
+???	Sales Revenue
+???	Cost of Goods Sold 
+
+???	Unpaid Accounts Receivable  
+
+???	Allowance for Doubtful Accounts 
+
+???	Inventory on hand at 12/31/2016
+Use your findings to audit management???s December 31, 2016 Trial Balance (table 1 below).  Assume that an error of $1,000,000 is considered intolerable (i.e., material for that particular account) in any of the accounts on the trial balance.  
+Identify all the accounts that you think are materially in error, and suggest a revision to the trial balance that represents your assessment of the true values for these accounts (within $1,000,000 materiality/accuracy level)
+
+
+Solution - Work done using the following R code which is self-explanatory
+
+Creating an appropriate environment
+```{r warning=FALSE, message=FALSE}
+setwd("/Users/Mughundhan/UIC/UIC Academics/SPRING 2017/AUDIT/Mid Term")
+collections <- read.csv("collections.csv", header = T)
+credit <- read.csv("credit.csv", header = T)
+inventory <- read.csv("inventory.csv", header = T)
+purchases <- read.csv("purchases.csv", header = T)
+sales <- read.csv("sales.csv", header = T)
+library(lubridate)
+```
+
+To have an overall idea about the given data
+```{r}
+summary(collections)
+summary(credit)
+summary(inventory)
+summary(purchases)
+summary(sales)
+str(collections)
+str(credit)
+str(inventory)
+str(purchases)
+str(sales)
+```
+
+Work done related to "Sales Revenue"
+```{r warning=FALSE, message=FALSE}
+audityear = interval(ymd(20160101), ymd(20161231)) #Data inferred from Summary
+sales$datep = as_date(sales$date) #Type Casting for computational ease
+sales$year = year(sales$datep)
+salesA = split(sales,sales$year)$'2016'
+sales.audit.year = split(sales, sales$year)
+summary(sales.audit.year)
+head(salesA) #Top 6 entries
+total_2016_Sales = sum(salesA$total)
+total_2016_Sales
+```
+
+Work done related to "Inventory"
+```{r warning=FALSE, message=FALSE}
+inventory_cost = sum(inventory$unitcost*inventory$endstock)
+inventory_cost
+```
+
+Work done related to "Cost of Goods Sold"
+```{r warning=FALSE, message=FALSE}
+CGS1=merge(salesA,inventory,by="sku")
+head(CGS1)
+sum (CGS1$qty*CGS1$unitcost)
+```
+
+Generic computations related to purchases
+```{r warning=FALSE, message=FALSE}
+audityear = interval(ymd(20160101), ymd(20161231))
+purchases$datep = as_date(purchases$date)
+purchases$year = year(purchases$datep)
+purchasesA = split(purchases,purchases$year)$'2016'
+head(purchasesA)
+```
+
+Generic computations related to collections
+```{r warning=FALSE, message=FALSE}
+audityear = interval(ymd(20160101), ymd(20161231))
+collections$datep = as_date(collections$date)
+collections$year = year(collections$datep)
+collectionsA = split(collections,collections$year)$'2016'
+head(collectionsA)
+```
+
+<!-- Work done related to "Allowance for Doubtful Accounts" -->
+<!-- ```{r warning=FALSE, message=FALSE} -->
+
+<!-- accountsReceivable=merge(salesA,collectionsA,by="invoice",all.x = TRUE) -->
+<!-- head(accountsReceivable) -->
+
+<!-- accountsReceivable$collected[is.na(accountsReceivable$collected)]<-0 -->
+<!-- accountsReceivable$collected[accountsReceivable$collected<0]<-0 -->
+
+<!-- cashamt = sum(accountsReceivable$collected) -->
+<!-- cashamt -->
+
+<!-- cashamt1 = sum(accountsReceivable$total) -->
+<!-- cashamt1 -->
+
+<!-- differencecashamt = cashamt1 - cashamt -->
+<!-- differencecashamt -->
+<!-- ``` -->
+
+<!-- Work done related to "Allowance for Doubtful Accounts" -->
+<!-- ```{r warning=FALSE, message=FALSE} -->
+<!-- allowancetable = accountsReceivable -->
+<!-- head(allowancetable) -->
+<!-- allowancetable$ar<-(allowancetable$total-allowancetable$collected) -->
+<!-- head(allowancetable) -->
+<!-- allowancetable$ardueperiod<-as.Date(as.character("2016-12-31"),format="%Y-%m-%d")-as.Date(as.character(allowancetable$date.x),format="%Y-%m-%d") -->
+<!-- allowancetableRefined = allowancetable[allowancetable$ar>0,] -->
+<!-- head(allowancetableRefined) -->
+
+
+<!-- for (i in 1:nrow(allowancetableRefined)) -->
+<!-- { -->
+<!--   if(allowancetableRefined$ardueperiod[i]>180){ -->
+<!--     allowancetableRefined$allowanceamt[i] = 0.4*allowancetableRefined$ar[i] -->
+<!--   }else if(allowancetableRefined$ardueperiod[i]>=90 && allowancetableRefined$ardueperiod[i]<=180){ -->
+<!--     allowancetableRefined$allowanceamt[i] = 0.2*allowancetableRefined$ar[i] -->
+<!--   }else{ -->
+<!--     allowancetableRefined$allowanceamt[i] = 0 -->
+<!--   } -->
+<!-- } -->
+
+<!-- sum(allowancetableRefined$allowanceamt) -->
+<!-- ``` -->
